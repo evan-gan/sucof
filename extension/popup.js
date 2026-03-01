@@ -67,14 +67,29 @@ readBtn.addEventListener('click', async () => {
 // ── Markdown conversion ──────────────────────────────────────────────────────
 
 const turndown = new TurndownService({
-  headingStyle:   'atx',
+  headingStyle:    'atx',
   bulletListMarker: '-',
-  codeBlockStyle: 'fenced',
-  fence:          '```',
-  hr:             '---',
+  codeBlockStyle:  'fenced',
+  fence:           '```',
+  hr:              '---',
   strongDelimiter: '**',
-  emDelimiter:    '*',
+  emDelimiter:     '*',
 });
+
+// Elements whose entire subtree is noise — strip before Turndown sees them
+const STRIP = [
+  'script', 'style', 'noscript',   // code & styles
+  'svg', 'canvas', 'picture',       // graphics
+  'iframe', 'frame', 'frameset',    // embeds
+  'template',                       // inert HTML templates
+  'head', 'link', 'meta',           // document infrastructure
+].join(',');
+
+function cleanHtml(rawHtml) {
+  const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
+  doc.querySelectorAll(STRIP).forEach(el => el.remove());
+  return doc.body.innerHTML;
+}
 
 function convertToMarkdown() {
   statusEl.textContent = 'Converting to markdown…';
@@ -83,7 +98,7 @@ function convertToMarkdown() {
   // Yield to the browser so the status update paints before the (sync) parse
   setTimeout(() => {
     try {
-      currentMarkdown = turndown.turndown(currentHtml);
+      currentMarkdown = turndown.turndown(cleanHtml(currentHtml));
       mdPanel.textContent = currentMarkdown;
       mdPanel.classList.remove('empty');
       statusEl.textContent =
