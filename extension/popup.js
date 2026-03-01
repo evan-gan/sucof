@@ -293,7 +293,49 @@ async function fetchPageMarkdown() {
   statusEl.textContent = `Page loaded · ${shortUrl}`;
 }
 
-// ── Schoolwork check ─────────────────────────────────────────────────────────
+// ── Schoolwork / productivity check ──────────────────────────────────────────
+
+/**
+ * Classifies the current page as schoolwork (productive) or not.
+ * Fetches page content if not already available.
+ * Returns { isProductive: boolean, answer: string }.
+ */
+async function runProductivityCheck() {
+  if (!currentMarkdown) await fetchPageMarkdown();
+
+  // Truncate first, then redact — cheap to truncate before running regexes
+  const snippet = redactSensitive(currentMarkdown.slice(0, 3000));
+
+  const res = await fetch('http://localhost:11434/api/chat', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({
+      model:    modelToUse,
+      messages: [
+        {
+          role:    'system',
+          content: 'You are a page classifier. Reply with "Yes" or "No" followed by one short sentence explaining why.',
+        },
+        {
+          role:    'user',
+          content: `${loadSettings().homeworkPrompt?.trim() || DEFAULT_HOMEWORK_PROMPT}\n\n${snippet}`,
+        },
+      ],
+      stream:  false,
+      options: {
+        temperature: 0,    // greedy decode — no sampling, fastest path
+        num_predict: 60,   // stop after ~one sentence, don't let it ramble
+        num_ctx:     1024, // smaller KV-cache = less memory, faster inference
+      },
+    }),
+  });
+
+  if (!res.ok) throw new Error(`Ollama error ${res.status}: ${res.statusText}`);
+  const data   = await res.json();
+  const answer = data.message?.content?.trim() ?? '(no response)';
+
+  return { isProductive: answer.toLowerCase().startsWith('yes'), answer };
+}
 
 schoolworkBtn.addEventListener('click', async () => {
   if (isBusy) return;
@@ -303,47 +345,13 @@ schoolworkBtn.addEventListener('click', async () => {
   statusEl.textContent = 'Checking if schoolwork…';
 
   try {
-    if (!currentMarkdown) await fetchPageMarkdown();
-
-    // Truncate first, then redact — cheap to truncate before running regexes
-    const snippet = redactSensitive(currentMarkdown.slice(0, 3000));
-
-    const t0  = performance.now();
-
-    const res = await fetch('http://localhost:11434/api/chat', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({
-        model:    modelToUse,
-        messages: [
-          {
-            role:    'system',
-            content: 'You are a page classifier. Reply with "Yes" or "No" followed by one short sentence explaining why.',
-          },
-          {
-            role:    'user',
-            content: `${loadSettings().homeworkPrompt?.trim() || DEFAULT_HOMEWORK_PROMPT}\n\n${snippet}`,
-          },
-        ],
-        stream:  false,
-        options: {
-          temperature: 0,    // greedy decode — no sampling, fastest path
-          num_predict: 60,   // stop after ~one sentence, don't let it ramble
-          num_ctx:     1024, // smaller KV-cache = less memory, faster inference
-        },
-      }),
-    });
-
+    const t0 = performance.now();
+    const { isProductive, answer } = await runProductivityCheck();
     const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
 
-    if (!res.ok) throw new Error(`Ollama error ${res.status}: ${res.statusText}`);
-    const data   = await res.json();
-    const answer = data.message?.content?.trim() ?? '(no response)';
-
-    const isSchoolwork = answer.toLowerCase().startsWith('yes');
     addMessage('assistant', `🎓 Schoolwork? ${answer}`);
 
-    if (!isSchoolwork) {
+    if (!isProductive) {
       const { token, channelId } = loadSettings();
       if (token && channelId) {
         const slackMsg = `Not doing schoolwork\n${answer}\n${currentPageUrl}`;
@@ -466,8 +474,9 @@ function addToolCallMessage(name, args, result) {
 
 /**
  * Checks chrome.storage.local for a prompt left by the background service
- * worker (via a fired chrome.alarms event). If one is found it is consumed
- * and auto-submitted, triggering the productivity check without user input.
+ * worker (via a fired chrome.alarms event). If one is found it is consumed,
+ * then a productivity check runs first — the shaming prompt is only sent if
+ * the user is NOT currently being productive.
  */
 async function checkAndFirePendingPrompt() {
   const stored = await chrome.storage.local.get('sucof_pending_prompt');
@@ -477,7 +486,19 @@ async function checkAndFirePendingPrompt() {
   // Clear the pending prompt immediately so it only fires once
   await chrome.storage.local.remove('sucof_pending_prompt');
 
-  // Pre-fill the input and submit — gives the user a visual record of the prompt
+  // Check if the user is actually slacking before shaming them
+  try {
+    statusEl.textContent = 'Productivity check running…';
+    const { isProductive } = await runProductivityCheck();
+    if (isProductive) {
+      statusEl.textContent = 'Productivity check: looks productive ✓';
+      return;
+    }
+  } catch {
+    // If the check itself fails, proceed with the scheduled prompt anyway
+  }
+
+  // User is not being productive — fire the shaming prompt
   userInput.value = pending;
   userInput.dispatchEvent(new Event('input')); // trigger auto-resize
   sendMessage();
