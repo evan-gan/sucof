@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Page HTML Reader",
+  "name": "Page Chat",
   "version": "1.0.0",
-  "description": "Reads and displays the HTML source of the current page",
+  "description": "Chat with any web page using a local AI model",
   "permissions": ["activeTab", "scripting"],
   "host_permissions": [
     "http://localhost:11434/*",
@@ -10,6 +10,6 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Read Page HTML"
+    "default_title": "Page Chat"
   }
 }

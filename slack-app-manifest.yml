@@ -1,0 +1,21 @@
+display_information:
+  name: Page HTML Reader Bot
+  description: Sends messages from the Page HTML Reader Chrome extension to Slack.
+  background_color: "#1e1e2e"
+
+features:
+  bot_user:
+    display_name: Page HTML Reader
+    always_online: false
+
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
+
+
