@@ -131,7 +131,7 @@ const charCount       = document.getElementById('charCount');
 const sendBtn         = document.getElementById('sendBtn');
 
 // Load saved settings into inputs on startup
-chrome.storage.local.get(['slackToken', 'slackChannel'], (result) => {
+chrome.storage.local.get(['slackToken', 'slackChannel'], (result = {}) => {
   if (chrome.runtime.lastError) return;
   if (result.slackToken)   tokenInput.value   = result.slackToken;
   if (result.slackChannel) channelInput.value = result.slackChannel;
