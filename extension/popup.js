@@ -8,6 +8,7 @@ const modelPicker   = document.getElementById('modelPicker');
 const modelDropdown = document.getElementById('modelDropdown');
 const modelFilter   = document.getElementById('modelFilter');
 const modelList     = document.getElementById('modelList');
+const schoolworkBtn = document.getElementById('schoolworkBtn');
 const refreshBtn    = document.getElementById('refreshBtn');
 const faviconEl     = document.getElementById('favicon');
 const settingsBtn   = document.getElementById('settingsBtn');
@@ -20,6 +21,7 @@ chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
 });
 
 let currentMarkdown     = '';
+let currentPageUrl      = '';
 let isBusy              = false;
 let availableModels     = [];
 let modelToUse          = 'gemma3:1b';
@@ -103,9 +105,19 @@ document.addEventListener('click', (e) => {
 // ── Settings ──────────────────────────────────────────────────────────────────
 
 // Add fields here to expand the settings panel
+const DEFAULT_HOMEWORK_PROMPT =
+  'Classify this page as schoolwork or not.\n' +
+  'Answer YES if the page is: a homework assignment, quiz, exam, problem set, lab report, essay prompt, ' +
+  'lecture slide deck, course syllabus, academic reading, study guide, or any content a student is ' +
+  'required to complete or submit for a class.\n' +
+  'Answer NO if the page is: entertainment, social media, a news article, a YouTube video, a game, ' +
+  'shopping, a general tutorial the user chose on their own, or anything not tied to a specific class or assignment.\n' +
+  'When in doubt, answer NO.';
+
 const SETTINGS_FIELDS = [
-  { key: 'token',     label: 'Token',      type: 'password', placeholder: 'xoxb-…' },
-  { key: 'channelId', label: 'Channel ID', type: 'text',     placeholder: 'C0XXXXXXXX' },
+  { key: 'token',          label: 'Slack Token',      type: 'password',  placeholder: 'xoxb-…' },
+  { key: 'channelId',      label: 'Slack Channel ID', type: 'text',      placeholder: 'C0XXXXXXXX' },
+  { key: 'homeworkPrompt', label: 'Homework check prompt', type: 'textarea', placeholder: DEFAULT_HOMEWORK_PROMPT },
 ];
 
 const SETTINGS_STORAGE_KEY = 'sucof_settings';
@@ -135,10 +147,17 @@ function renderSettingsForm() {
     label.className = 'settings-label';
     label.textContent = field.label;
 
-    const input = document.createElement('input');
-    input.type = field.type;
+    let input;
+    if (field.type === 'textarea') {
+      input = document.createElement('textarea');
+      input.className = 'settings-textarea';
+      input.rows = 4;
+    } else {
+      input = document.createElement('input');
+      input.type = field.type;
+      input.className = 'settings-input';
+    }
     input.id = `setting-${field.key}`;
-    input.className = 'settings-input';
     input.placeholder = field.placeholder || '';
     input.value = saved[field.key] || '';
 
@@ -213,12 +232,44 @@ const turndown = new TurndownService({
 const STRIP = [
   'script', 'style', 'noscript', 'svg', 'canvas', 'picture',
   'iframe', 'frame', 'frameset', 'template', 'head', 'link', 'meta',
+  'input', 'textarea', 'select', 'form',  // form values may contain passwords / personal data
 ].join(',');
 
 function cleanHtml(rawHtml) {
   const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
   doc.querySelectorAll(STRIP).forEach(el => el.remove());
+  // Also blank out any remaining input values before serialising
+  doc.querySelectorAll('[value]').forEach(el => el.removeAttribute('value'));
   return doc.body.innerHTML;
+}
+
+// Patterns are applied in order; each replaces with a safe placeholder.
+const REDACT_RULES = [
+  // Passwords embedded in URLs:  https://user:secret@host
+  [/:\/\/[^/:@\s]+:[^/:@\s]+@/g,                                              '://[REDACTED]@'],
+  // PEM private / certificate blocks
+  [/-----BEGIN [\w ]+----- *[\s\S]*?-----END [\w ]+-----/g,                  '[REDACTED-KEY]'],
+  // JWT tokens  (three dot-separated base64url segments)
+  [/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g,                '[REDACTED-JWT]'],
+  // Well-known API key prefixes
+  [/\b(sk-[A-Za-z0-9]{20,}|xox[bpars]-[\w-]{10,}|gh[pousr]_\w{36,}|AKIA[A-Z0-9]{16}|AIza[\w-]{35})\b/g, '[REDACTED-KEY]'],
+  // Social Security Numbers  (123-45-6789 / 123 45 6789)
+  [/\b\d{3}[- ]\d{2}[- ]\d{4}\b/g,                                          '[REDACTED-SSN]'],
+  // Credit card numbers in display format  (1234 5678 9012 3456 or with dashes)
+  [/\b\d{4}[- ]\d{4}[- ]\d{4}[- ]\d{4}\b/g,                                '[REDACTED-CC]'],
+  // Raw 16-digit card numbers starting with a known issuer prefix
+  [/\b(?:4\d{15}|5[1-5]\d{14}|3[47]\d{13}|6011\d{12})\b/g,                 '[REDACTED-CC]'],
+  // password / secret / token / api_key assignments  (code, config, JSON)
+  [/(?:password|passwd|secret|token|api[_-]?key|auth_?key)\s*[:=]+\s*["']?[^\s"',;\n]{6,}["']?/gi, '[REDACTED-CRED]'],
+  // Long hex strings that look like hashes or raw keys (40+ hex chars)
+  [/\b[A-Fa-f0-9]{40,}\b/g,                                                  '[REDACTED-HASH]'],
+];
+
+function redactSensitive(text) {
+  for (const [pattern, replacement] of REDACT_RULES) {
+    text = text.replace(pattern, replacement);
+  }
+  return text;
 }
 
 async function fetchPageMarkdown() {
@@ -233,10 +284,88 @@ async function fetchPageMarkdown() {
   statusEl.textContent = 'Parsing…';
   await new Promise(r => setTimeout(r, 0)); // let status paint
   currentMarkdown = turndown.turndown(cleanHtml(html));
+  currentPageUrl  = tab.url;
 
   const shortUrl = tab.url.length > 55 ? tab.url.slice(0, 55) + '…' : tab.url;
   statusEl.textContent = `Page loaded · ${shortUrl}`;
 }
+
+// ── Schoolwork check ─────────────────────────────────────────────────────────
+
+schoolworkBtn.addEventListener('click', async () => {
+  if (isBusy) return;
+  isBusy = true;
+  schoolworkBtn.disabled = true;
+  schoolworkBtn.classList.add('checking');
+  statusEl.textContent = 'Checking if schoolwork…';
+
+  try {
+    if (!currentMarkdown) await fetchPageMarkdown();
+
+    // Truncate first, then redact — cheap to truncate before running regexes
+    const snippet = redactSensitive(currentMarkdown.slice(0, 3000));
+
+    const t0  = performance.now();
+
+    const res = await fetch('http://localhost:11434/api/chat', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        model:    modelToUse,
+        messages: [
+          {
+            role:    'system',
+            content: 'You are a page classifier. Reply with "Yes" or "No" followed by one short sentence explaining why.',
+          },
+          {
+            role:    'user',
+            content: `${loadSettings().homeworkPrompt?.trim() || DEFAULT_HOMEWORK_PROMPT}\n\n${snippet}`,
+          },
+        ],
+        stream:  false,
+        options: {
+          temperature: 0,    // greedy decode — no sampling, fastest path
+          num_predict: 60,   // stop after ~one sentence, don't let it ramble
+          num_ctx:     1024, // smaller KV-cache = less memory, faster inference
+        },
+      }),
+    });
+
+    const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+
+    if (!res.ok) throw new Error(`Ollama error ${res.status}: ${res.statusText}`);
+    const data   = await res.json();
+    const answer = data.message?.content?.trim() ?? '(no response)';
+
+    const isSchoolwork = answer.toLowerCase().startsWith('yes');
+    addMessage('assistant', `🎓 Schoolwork? ${answer}`);
+
+    if (!isSchoolwork) {
+      const { token, channelId } = loadSettings();
+      if (token && channelId) {
+        const slackMsg = `Not doing schoolwork\n${answer}\n${currentPageUrl}`;
+        const slackRes = await fetch('https://slack.com/api/chat.postMessage', {
+          method:  'POST',
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ channel: channelId, text: slackMsg }),
+        });
+        const slackData = await slackRes.json();
+        if (!slackData.ok) throw new Error(`Slack: ${slackData.error}`);
+        statusEl.textContent = `Not schoolwork — Slack notified · ${elapsed}s`;
+      } else {
+        statusEl.textContent = `Not schoolwork · ${elapsed}s`;
+      }
+    } else {
+      statusEl.textContent = `Schoolwork ✓ · ${elapsed}s`;
+    }
+  } catch (err) {
+    statusEl.textContent = `Schoolwork check failed: ${err.message}`;
+  } finally {
+    isBusy = false;
+    schoolworkBtn.disabled = false;
+    schoolworkBtn.classList.remove('checking');
+  }
+});
 
 // ── Refresh button ───────────────────────────────────────────────────────────
 

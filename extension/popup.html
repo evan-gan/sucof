@@ -171,7 +171,7 @@
       opacity: 1;
     }
 
-    #refreshBtn {
+    #schoolworkBtn, #refreshBtn {
       background: none;
       border: none;
       color: #6c7086;
@@ -185,9 +185,23 @@
       line-height: 1;
     }
 
-    #refreshBtn:hover {
+    #schoolworkBtn:hover, #refreshBtn:hover {
       color: #cdd6f4;
       background: #313244;
+    }
+
+    #schoolworkBtn.checking {
+      color: #cba6f7;
+      background: #313244;
+    }
+
+    #schoolworkBtn.checking svg {
+      animation: sw-spin 1.2s linear infinite;
+    }
+
+    @keyframes sw-spin {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
     }
 
     /* ── Status bar ──────────────────────────────────── */
@@ -479,6 +493,23 @@
 
     .settings-input::placeholder { color: #585b70; }
 
+    .settings-textarea {
+      font-family: inherit;
+      font-size: 12px;
+      padding: 8px 11px;
+      border: 1px solid #45475a;
+      border-radius: 10px;
+      background: #2a2a3e;
+      color: #cdd6f4;
+      outline: none;
+      resize: vertical;
+      line-height: 1.5;
+      transition: border-color 0.15s;
+    }
+
+    .settings-textarea:focus { border-color: #7287fd; }
+    .settings-textarea::placeholder { color: #585b70; }
+
     .settings-save-btn {
       margin: 0 14px 16px;
       padding: 9px;
@@ -511,6 +542,11 @@
           <div id="modelList"></div>
         </div>
       </div>
+      <button id="schoolworkBtn" title="Is this schoolwork?">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 3L1 9l11 6 9-4.91V17h2V9L12 3zm-7 9.17V16c0 1.1 3.13 2 7 2s7-.9 7-2v-3.83L12 17l-7-4.83z"/>
+        </svg>
+      </button>
       <button id="refreshBtn" title="Re-read current page">
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path d="M13.65 2.35A7.958 7.958 0 0 0 8 0C3.58 0 0 3.58 0 8s3.58 8 8 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 8 14c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L9 7h7V0l-2.35 2.35z" fill="currentColor"/>
