@@ -284,28 +284,6 @@ function addTypingIndicator() {
   return wrap;
 }
 
-/**
- * Extracts the "content" string value from a partial or complete JSON blob
- * as it streams in, so we can show live text before the JSON is fully parsed.
- */
-function extractStreamingContent(partial) {
-  const idx = partial.indexOf('"content"');
-  if (idx === -1) return null;
-  const afterColon = partial.slice(idx + 9).replace(/^\s*:\s*/, '');
-  if (!afterColon.startsWith('"')) return null;
-  let result = '';
-  for (let i = 1; i < afterColon.length; i++) {
-    if (afterColon[i] === '\\' && i + 1 < afterColon.length) {
-      const esc = afterColon[++i];
-      result += esc === 'n' ? '\n' : esc === 't' ? '\t' : esc;
-    } else if (afterColon[i] === '"') {
-      break;
-    } else {
-      result += afterColon[i];
-    }
-  }
-  return result || null;
-}
 
 /** Appends a collapsible tool-call chip showing the tool name, inputs, and output. */
 function addToolCallMessage(name, args, result) {
@@ -420,20 +398,17 @@ async function sendMessage() {
             const data = JSON.parse(line);
             if (data.message?.content) {
               fullResponse += data.message.content;
-              // Try to extract the "content" field from partial JSON for live display.
-              // If the model isn't outputting JSON (plain text), stream it directly.
-              // Suppress display if the response looks like JSON (raw or code-fenced).
-              const trimmed = fullResponse.trimStart();
-              const looksLikeJson = trimmed.startsWith('{') || trimmed.startsWith('`');
-              const liveText = extractStreamingContent(fullResponse)
-                ?? (looksLikeJson ? null : fullResponse);
-              if (liveText) {
+              if (fullResponse.includes('TOOL_USE')) {
+                // Tool call in progress — hide any text we started showing.
+                if (aiBubble) { aiBubble.remove(); aiBubble = null; }
+              } else {
+                // Plain text response — stream it live.
                 if (!aiBubble) {
                   typingEl?.remove();
                   typingEl = null;
                   aiBubble = addMessage('assistant', '');
                 }
-                aiBubble.textContent = liveText;
+                aiBubble.textContent = fullResponse;
                 chatArea.scrollTop = chatArea.scrollHeight;
               }
             }
@@ -442,20 +417,18 @@ async function sendMessage() {
         }
       }
 
-      const parsed = parseModelResponse(fullResponse);
+      const toolCall = parseToolUse(fullResponse);
 
-      // Model wants to call a tool.
-      if (parsed?.action === 'tool') {
-        const { name, args = {} } = parsed;
-        // Always remove the streaming bubble — the chip replaces it.
+      // Model called a tool.
+      if (toolCall) {
         if (aiBubble) { aiBubble.remove(); aiBubble = null; }
         conversationHistory.push({ role: 'assistant', content: fullResponse });
-        statusEl.textContent = `Tool: ${name}…`;
-        const result = await runMCPTool(name, args, mcpContext);
-        addToolCallMessage(name, args, result);
+        statusEl.textContent = `Tool: ${toolCall.name}…`;
+        const result = await runMCPTool(toolCall.name, toolCall.args, mcpContext);
+        addToolCallMessage(toolCall.name, toolCall.args, result);
 
         // Detect repeated identical calls and nudge the model to stop looping.
-        const callKey = `${name}:${JSON.stringify(args)}`;
+        const callKey = `${toolCall.name}:${JSON.stringify(toolCall.args)}`;
         if (callKey === lastToolKey) {
           sameCallStreak++;
         } else {
@@ -463,34 +436,20 @@ async function sendMessage() {
           sameCallStreak = 0;
         }
         const loopHint = sameCallStreak >= 1
-          ? ` You have now called "${name}" with the same arguments ${sameCallStreak + 1} times and the result will not change. Stop calling tools and respond to the user now using the respond action.`
+          ? ` You have now called "${toolCall.name}" with the same arguments ${sameCallStreak + 1} times and the result will not change. Stop calling tools and respond with plain text.`
           : '';
-        conversationHistory.push({ role: 'user', content: `Tool result (${name}): ${result}${loopHint}` });
+        conversationHistory.push({ role: 'user', content: `Tool result (${toolCall.name}): ${result}${loopHint}` });
         statusEl.textContent = 'Thinking…';
-        continue;  // aiBubble is reset at the top of the next iteration
+        continue;
       }
 
-      // If parsing failed and response looks like attempted JSON, nudge the model
-      // to format correctly rather than dumping raw JSON into the chat.
-      if (!parsed) {
-        const t = fullResponse.trimStart();
-        if (t.startsWith('{') || t.startsWith('`')) {
-          if (aiBubble) { aiBubble.remove(); aiBubble = null; }
-          conversationHistory.push({ role: 'assistant', content: fullResponse });
-          conversationHistory.push({ role: 'user', content: 'Your response was not valid JSON. Reply with exactly one JSON object using the respond or tool format — no extra text, no trailing commas, no markdown fences.' });
-          statusEl.textContent = 'Retrying…';
-          continue;
-        }
-      }
-
-      // Final answer.
-      const displayText = parsed?.action === 'respond' ? parsed.content : fullResponse;
+      // Plain text final answer — already streamed live.
       if (aiBubble) {
-        aiBubble.textContent = displayText;
+        aiBubble.textContent = fullResponse;
       } else {
         typingEl?.remove();
         typingEl = null;
-        addMessage('assistant', displayText);
+        addMessage('assistant', fullResponse);
       }
       conversationHistory.push({ role: 'assistant', content: fullResponse });
       const secs = totalDuration ? (totalDuration / 1e9).toFixed(1) : '?';

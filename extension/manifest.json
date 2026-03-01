@@ -5,7 +5,8 @@
   "description": "Reads and displays the HTML source of the current page",
   "permissions": ["activeTab", "scripting"],
   "host_permissions": [
-    "http://localhost:11434/*"
+    "http://localhost:11434/*",
+    "https://slack.com/api/*"
   ],
   "action": {
     "default_popup": "popup.html",

@@ -33,8 +33,8 @@ const MCP_TOOLS = [
 
   {
     name: 'search_page',
-    description: 'Search the page for lines containing a given term. Fetches the page first if needed. Returns up to 20 matches.',
-    args: { query: 'string – term to search for (case-insensitive)' },
+    description: 'Search the page for lines containing a given term. Fetches the page first if needed. Returns up to 20 matches. The query must be keywords from the user request (not a guessed answer).',
+    args: { query: 'string – keyword or short phrase to find (case-insensitive). Use user-provided terms, not invented facts.' },
     execute: async ({ query }, { pageMarkdown, fetchPage }) => {
       const content = pageMarkdown || await fetchPage();
       const matches = content
@@ -43,6 +43,33 @@ const MCP_TOOLS = [
       return matches.length
         ? matches.slice(0, 20).join('\n')
         : `No matches for "${query}".`;
+    },
+  },
+
+  {
+    name: 'send_slack_message',
+    description: 'Send a message to a Slack channel using the bot token and channel ID configured in Settings.',
+    args: {
+      message: 'string – the message text to send',
+    },
+    execute: async ({ message }) => {
+      let settings = {};
+      try { settings = JSON.parse(localStorage.getItem('sucof_settings')) || {}; } catch {}
+      const token = settings.token;
+      const channelId = settings.channelId;
+      if (!token) return 'Error: No Slack token configured. Add one in Settings (xoxb-…).';
+      if (!channelId) return 'Error: No channel ID configured. Add one in Settings or pass a channel argument.';
+      const res = await fetch('https://slack.com/api/chat.postMessage', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ channel: channelId, text: message }),
+      });
+      const data = await res.json();
+      if (!data.ok) return `Slack error: ${data.error}`;
+      return `Message sent to ${channelId}.`;
     },
   },
 
@@ -68,70 +95,148 @@ const MCP_TOOLS = [
 function buildSystemPrompt() {
   const toolLines = MCP_TOOLS.map(t => {
     const argStr = Object.keys(t.args).length
-      ? JSON.stringify(Object.fromEntries(Object.keys(t.args).map(k => [k, '...'])))
-      : '{}';
-    return `  • ${t.name}: ${t.description}\n    args: ${argStr}`;
+      ? Object.entries(t.args).map(([k, v]) => `      ${k}: ${v}`).join('\n')
+      : '      (no arguments)';
+    return `  • ${t.name}: ${t.description}\n${argStr}`;
   }).join('\n');
 
-  const toolSection = MCP_TOOLS.length
-    ? `To call a tool (always include a brief content message so the user knows what you're doing):\n{"action":"tool","name":"tool_name","args":{},"content":"Brief message..."}\n\nAvailable tools:\n${toolLines}\n\n`
-    : '';
+  const toolSection = MCP_TOOLS.length ? `
+
+## How to call a tool — read carefully
+To call a tool you MUST output EXACTLY this format and nothing else — no extra text, no code fences, no JSON:
+
+TOOL_USE
+TOOL: tool_name_here
+argument_name: argument value here
+TOOL_USE_END
+
+─── CORRECT EXAMPLES ────────────────────────────────────────────
+Example 1 – send a Slack message:
+TOOL_USE
+TOOL: send_slack_message
+message: Hello from the bot!
+TOOL_USE_END
+
+Example 2 - search the page:
+TOOL_USE
+TOOL: search_page
+query: pricing
+TOOL_USE_END
+
+Example 3 – get page content (no arguments):
+TOOL_USE
+TOOL: get_page_content
+TOOL_USE_END
+
+─── WRONG — NEVER DO THESE ──────────────────────────────────────
+❌ Wrong: using a code fence or "tool_output" label:
+\`\`\`tool_output
+send_slack_message: "Hello!"
+\`\`\`
+
+❌ Wrong: using JSON:
+{"action":"tool","name":"send_slack_message","args":{"message":"Hello!"}}
+
+❌ Wrong: just writing the tool name and value without the TOOL_USE wrapper:
+send_slack_message: "Hello!"
+
+❌ Wrong: wrapping the arg value in quotes:
+TOOL_USE
+TOOL: send_slack_message
+message: "Hello!"
+TOOL_USE_END
+(Correct: message: Hello!  — no quote marks around the value)
+
+❌ Wrong: adding extra text before or after the block:
+I'll send the message now.
+TOOL_USE
+TOOL: send_slack_message
+message: Hello!
+TOOL_USE_END
+Here it is!
+
+The TOOL_USE / TOOL_USE_END wrapper is REQUIRED every single time. Nothing else is acceptable.
+─────────────────────────────────────────────────────────────────
+
+Tool argument accuracy rules:
+- Never invent facts, quotes, numbers, or page content in tool arguments.
+- Use only information from (a) the user's message and (b) prior tool results.
+- For search_page.query, pass literal keywords/phrases to find (e.g. "refund", "pricing").
+- Do NOT write a guessed answer as the search_page.query value.
+- For "search the page and send to Slack": (1) call get_page_content, (2) summarise from that result, (3) call send_slack_message with the summary.
+
+Available tools:
+${toolLines}
+
+After a tool result is given to you, reply with your final answer as plain text.` : '';
 
   return `You are a helpful, friendly assistant. The user is viewing a web page.
 
-You MUST reply with a single JSON object and nothing else — no markdown, no extra text.
+IMPORTANT: You MUST use tools to gather information — NEVER guess, assume, or answer from memory. If you don't have the information yet, call a tool to get it first.
 
-To answer the user:
-{"action":"respond","content":"your answer here"}
-
-${toolSection}After receiving a tool result, reply with the final answer using the respond format.`;
+Reply with plain text. Do NOT use JSON or any special format for regular responses.${toolSection}`;
 }
 
 /**
- * Fix mismatched brackets/braces that small models commonly produce
- * (e.g. `]` closing an object `{` instead of `}`).
+ * Parse a TOOL_USE block from model output.
+ * Returns { name, args } or null if no valid block is found.
+ *
+ * Tolerates a missing TOOL_USE_END: if the closing tag is absent the block is
+ * parsed to end-of-string, allowing dumb models that forget the tag to still
+ * trigger tools once all their args have been emitted.
+ *
+ * Also strips surrounding double-quotes from arg values so that a model
+ * writing  message: "Hello"  is treated the same as  message: Hello.
+ *
+ * Format:
+ *   TOOL_USE
+ *   TOOL: tool_name
+ *   arg: single-line value
+ *   arg2: first line
+ *   |continuation line
+ *   TOOL_USE_END          ← optional
  */
-function repairJson(str) {
-  const stack = [];
-  let inString = false;
-  let escaped = false;
-  const chars = str.split('');
-  for (let i = 0; i < chars.length; i++) {
-    const c = chars[i];
-    if (escaped) { escaped = false; continue; }
-    if (c === '\\' && inString) { escaped = true; continue; }
-    if (c === '"') { inString = !inString; continue; }
-    if (inString) continue;
-    if (c === '{' || c === '[') { stack.push(c); continue; }
-    if (c === '}' || c === ']') {
-      const open = stack.pop();
-      if (open === '{' && c === ']') chars[i] = '}';
-      else if (open === '[' && c === '}') chars[i] = ']';
-    }
-  }
-  return chars.join('');
-}
-
-/**
- * Parse a JSON response from the model.
- * Tolerates markdown fences, leading/trailing text, and mismatched brackets.
- * Returns the parsed object, or null if parsing fails.
- */
-function parseModelResponse(text) {
-  const stripped = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-  const match = stripped.match(/\{[\s\S]*[\}\]]/);
+function parseToolUse(text) {
+  // Prefer a properly-closed block; fall back to end-of-string if TOOL_USE_END is missing.
+  const match =
+    text.match(/TOOL_USE[\r\n]+TOOL:\s*(\S+)[\r\n]+([\s\S]*?)[\r\n]*TOOL_USE_END/) ??
+    text.match(/TOOL_USE[\r\n]+TOOL:\s*(\S+)[\r\n]+([\s\S]*)$/);
   if (!match) return null;
-  // Strip trailing commas before } or ] — a common small-model mistake.
-  const clean = match[0].replace(/,\s*([\}\]])/g, '$1');
-  try {
-    return JSON.parse(clean);
-  } catch {
-    try {
-      return JSON.parse(repairJson(clean));
-    } catch {
-      return null;
+
+  const name = match[1].trim();
+
+  // Only accept the fallback (no closing tag) when the named tool exists and
+  // every one of its declared args has been provided — avoids false positives
+  // on a still-streaming partial response.
+  const tool = MCP_TOOLS.find(t => t.name === name);
+  const hasClosed = text.includes('TOOL_USE_END');
+  if (!hasClosed && tool) {
+    const requiredArgs = Object.keys(tool.args);
+    const presentArgs = [...match[2].matchAll(/^(\w+):/gm)].map(m => m[1]);
+    const allPresent = requiredArgs.every(k => presentArgs.includes(k));
+    if (!allPresent) return null;
+  }
+
+  const args = {};
+  let currentKey = null;
+  for (const raw of match[2].split('\n')) {
+    const line = raw.replace(/\r$/, '');
+    if (line.startsWith('|')) {
+      if (currentKey !== null) args[currentKey] += '\n' + line.slice(1);
+    } else {
+      const colon = line.indexOf(':');
+      if (colon !== -1) {
+        currentKey = line.slice(0, colon).trim();
+        let value = line.slice(colon + 1).trim();
+        // Strip surrounding double-quotes that dumb models sometimes add.
+        if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
+          value = value.slice(1, -1);
+        }
+        args[currentKey] = value;
+      }
     }
   }
+  return { name, args };
 }
 
 /** Execute a tool by name. Always returns a string. */
