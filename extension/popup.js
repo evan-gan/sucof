@@ -96,6 +96,9 @@ document.addEventListener('click', (e) => {
       buildDropdown();
       statusEl.textContent = 'Ready · send a message to get started';
     }
+
+    // Check if the background service worker left a scheduled prompt to auto-send
+    await checkAndFirePendingPrompt();
   } catch {
     statusEl.textContent = 'Ollama not running — start it first.';
     modelBadge.textContent = 'offline';
@@ -457,6 +460,27 @@ function addToolCallMessage(name, args, result) {
   wrap.appendChild(details);
   chatArea.appendChild(wrap);
   chatArea.scrollTop = chatArea.scrollHeight;
+}
+
+// ── Scheduled prompt auto-fire ───────────────────────────────────────────────
+
+/**
+ * Checks chrome.storage.local for a prompt left by the background service
+ * worker (via a fired chrome.alarms event). If one is found it is consumed
+ * and auto-submitted, triggering the productivity check without user input.
+ */
+async function checkAndFirePendingPrompt() {
+  const stored = await chrome.storage.local.get('sucof_pending_prompt');
+  const pending = stored.sucof_pending_prompt;
+  if (!pending) return;
+
+  // Clear the pending prompt immediately so it only fires once
+  await chrome.storage.local.remove('sucof_pending_prompt');
+
+  // Pre-fill the input and submit — gives the user a visual record of the prompt
+  userInput.value = pending;
+  userInput.dispatchEvent(new Event('input')); // trigger auto-resize
+  sendMessage();
 }
 
 // ── Send message ─────────────────────────────────────────────────────────────

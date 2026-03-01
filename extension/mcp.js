@@ -73,6 +73,32 @@ const MCP_TOOLS = [
     },
   },
 
+  {
+    name: 'schedule_productivity_check',
+    description: 'Schedule a future check-in that automatically reopens this chat and sends a prompt you write. Use this to snitch on users who stopped being productive — schedule it to fire in a few minutes and call them out.',
+    args: {
+      // IMPORTANT: delay_minutes must be a plain integer like 5 or 10 — NOT true/false/yes/no
+      delay_minutes: 'integer – whole number of minutes from now before the check-in fires (minimum 1). Example: 5  NOT true, NOT false, NOT "5 minutes" — just the digit(s).',
+      prompt: 'string – the message to auto-send when the check-in fires (should call out non-productive behavior, e.g. "You\'ve been on YouTube for 10 minutes — get back to work!")',
+    },
+    execute: async ({ delay_minutes, prompt }) => {
+      // Clamp to a minimum of 1 minute so alarms always fire in the future
+      const delayNum = Math.max(1, parseFloat(delay_minutes) || 1);
+      const alarmName = `productivity_check_${Date.now()}`;
+
+      // Persist the prompt keyed by alarm name so background.js can retrieve it
+      await chrome.storage.local.set({
+        [`alarm_${alarmName}`]: { prompt, scheduledAt: new Date().toISOString() },
+      });
+
+      // chrome.alarms uses minutes as the unit
+      chrome.alarms.create(alarmName, { delayInMinutes: delayNum });
+
+      const fireTime = new Date(Date.now() + delayNum * 60 * 1000).toLocaleTimeString();
+      return `Productivity check scheduled for ${fireTime} (${delayNum} minute${delayNum !== 1 ? 's' : ''} from now). Prompt saved: "${prompt}"`;
+    },
+  },
+
   // Add your own tools below:
   //
   // {
@@ -128,6 +154,14 @@ TOOL_USE
 TOOL: get_page_content
 TOOL_USE_END
 
+Example 4 – schedule a productivity check in 5 minutes:
+TOOL_USE
+TOOL: schedule_productivity_check
+delay_minutes: 5
+prompt: You've been slacking for 5 minutes — get back to work!
+TOOL_USE_END
+(delay_minutes is a plain integer — 5, 10, 15 — NEVER true, false, yes, or no)
+
 ─── WRONG — NEVER DO THESE ──────────────────────────────────────
 ❌ Wrong: using a code fence or "tool_output" label:
 \`\`\`tool_output
@@ -164,6 +198,17 @@ Tool argument accuracy rules:
 - For search_page.query, pass literal keywords/phrases to find (e.g. "refund", "pricing").
 - Do NOT write a guessed answer as the search_page.query value.
 - For "search the page and send to Slack": (1) call get_page_content, (2) summarise from that result, (3) call send_slack_message with the summary.
+- For schedule_productivity_check.delay_minutes: write a bare integer only (e.g. 5). NEVER write true, false, yes, no, or a sentence.
+
+─── TOOL SPAM RULES — violations will break everything ──────────
+❌ NEVER call the same tool twice in a row with the same arguments — the result will be identical.
+❌ NEVER call get_page_content more than once per conversation — page content does not change.
+❌ NEVER call a tool "just to confirm" something you already have a result for.
+❌ NEVER chain more than 3 tool calls in a single response turn.
+✅ Once you have a tool result, USE IT — answer from the result, do not call more tools.
+✅ Call ONE tool at a time. Wait for its result before deciding whether another tool is needed.
+✅ If the user asks a simple question that doesn't need the page, answer directly without any tool.
+─────────────────────────────────────────────────────────────────
 
 Available tools:
 ${toolLines}

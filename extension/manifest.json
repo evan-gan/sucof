@@ -3,11 +3,14 @@
   "name": "Page Chat",
   "version": "1.0.0",
   "description": "Chat with any web page using a local AI model",
-  "permissions": ["activeTab", "scripting"],
+  "permissions": ["activeTab", "scripting", "alarms", "storage"],
   "host_permissions": [
     "http://localhost:11434/*",
     "https://slack.com/api/*"
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
     "default_popup": "popup.html",
     "default_title": "Page Chat"
