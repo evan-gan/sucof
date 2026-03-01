@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "sucof bridge",
-  "version": "1.0",
-  "background": {
-    "service_worker": "background.js"
-  },
+  "name": "Page HTML Reader",
+  "version": "1.0.0",
+  "description": "Reads and displays the HTML source of the current page",
   "permissions": ["activeTab", "scripting"],
-  "host_permissions": ["<all_urls>"]
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Read Page HTML"
+  }
 }

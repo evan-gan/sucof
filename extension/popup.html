@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Page HTML Reader</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      width: 600px;
+      height: 500px;
+      font-family: monospace;
+      background: #1e1e2e;
+      color: #cdd6f4;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      padding: 10px 14px;
+      background: #181825;
+      border-bottom: 1px solid #313244;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    header span {
+      font-size: 13px;
+      font-weight: bold;
+      color: #cba6f7;
+    }
+
+    .actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    button {
+      font-family: monospace;
+      font-size: 12px;
+      padding: 4px 10px;
+      border: 1px solid #45475a;
+      border-radius: 4px;
+      background: #313244;
+      color: #cdd6f4;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #45475a;
+    }
+
+    #status {
+      font-size: 11px;
+      padding: 4px 14px;
+      background: #181825;
+      color: #6c7086;
+      border-bottom: 1px solid #313244;
+      min-height: 22px;
+    }
+
+    #output {
+      flex: 1;
+      overflow: auto;
+      padding: 10px 14px;
+      white-space: pre;
+      font-size: 12px;
+      line-height: 1.5;
+      color: #a6e3a1;
+      background: #1e1e2e;
+    }
+
+    #output.empty {
+      color: #6c7086;
+      white-space: normal;
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <span>Page HTML Reader</span>
+    <div class="actions">
+      <button id="readBtn">Read HTML</button>
+      <button id="copyBtn">Copy</button>
+    </div>
+  </header>
+  <div id="status">Click "Read HTML" to fetch the current page's source.</div>
+  <div id="output" class="empty">No HTML loaded yet.</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
